@@ -1,37 +1,26 @@
-import { spawn } from "child_process";
-import readline from "node:readline";
 import { afterEach, expect, test } from "vitest";
 
-let cp: ReturnType<typeof spawn> | null = null;
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-afterEach(() => {
-  if (cp && !cp.killed) cp.kill();
+let client: Client | null = null;
+
+afterEach(async () => {
+  await client?.close();
+  client = null;
 });
 
-test("stdio list_tools via child process", async () => {
+test("stdio server lists tools via the MCP client", async () => {
   // Ensure dist exists — tests run after build in our workflow
-  cp = spawn(process.execPath, ["dist/index.js"], {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ["dist/index.js"],
     env: { ...process.env, GFW_API_TOKEN: "dummy" },
-    stdio: ["pipe", "pipe", "ignore"],
   });
 
-  const rl = readline.createInterface({ input: cp.stdout });
+  client = new Client({ name: "test-client", version: "0.0.0" });
+  await client.connect(transport);
 
-  let gotResponse: unknown = null;
-
-  for await (const line of rl) {
-    try {
-      const obj = JSON.parse(line as string);
-      if (obj && obj.event === "ready") {
-        cp.stdin.write(JSON.stringify({ method: "list_tools", id: 1 }) + "\n");
-      } else if (obj && obj.id === 1) {
-        gotResponse = obj;
-        break;
-      }
-    } catch {
-      // ignore non-json
-    }
-  }
-
-  expect(gotResponse).toEqual({ id: 1, result: { tools: [] } });
+  // No tools are registered yet, so the server doesn't advertise the "tools" capability.
+  expect(client.getServerCapabilities()?.tools).toBeUndefined();
 });

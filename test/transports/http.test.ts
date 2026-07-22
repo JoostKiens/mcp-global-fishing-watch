@@ -1,34 +1,26 @@
-import http from "node:http";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import type http from "node:http";
+import { afterEach, expect, test } from "vitest";
+
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+
 import { startHttp } from "../../src/transports/http.js";
 
 let server: http.Server | null = null;
 
-beforeEach(() => {
+afterEach(() => {
+  server?.close();
   server = null;
 });
 
-afterEach(() => {
-  if (server) server.close();
-});
-
-test("http list_tools returns empty tools", async () => {
-  server = startHttp({ port: 0 });
-  await new Promise((r) => server!.once("listening", r));
-  const addr = server!.address();
+test("http server lists tools via the MCP client", async () => {
+  server = await startHttp({ port: 0 });
+  const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : Number(addr);
 
-  const res = await new Promise<{ status: number | null; body: string }>((resolve, reject) => {
-    const req = http.request({ method: "POST", port, path: "/" }, (r) => {
-      let body = "";
-      r.on("data", (c) => (body += String(c)));
-      r.on("end", () => resolve({ status: r.statusCode ?? null, body }));
-    });
-    req.on("error", reject);
-    req.setHeader("content-type", "application/json");
-    req.write(JSON.stringify({ method: "list_tools", id: 1 }));
-    req.end();
-  });
+  const client = new Client({ name: "test-client", version: "0.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/`)));
 
-  expect(JSON.parse(res.body)).toEqual({ id: 1, result: { tools: [] } });
+  // No tools are registered yet, so the server doesn't advertise the "tools" capability.
+  expect(client.getServerCapabilities()?.tools).toBeUndefined();
 });

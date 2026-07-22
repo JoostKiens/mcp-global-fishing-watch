@@ -1,37 +1,34 @@
 import http from "node:http";
 import type { IncomingMessage, ServerResponse, Server } from "node:http";
 
-type MCPRequest = { method?: string; params?: unknown; id?: string | number };
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-export function startHttp(options: { port: number }): Server {
-  const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.method !== "POST") {
-      res.statusCode = 405;
-      res.end("Only POST supported\n");
-      return;
-    }
+import { createMcpServer } from "../create-server.js";
 
-    let body = "";
-    for await (const chunk of req) body += String(chunk);
+async function readBody(req: IncomingMessage): Promise<unknown> {
+  let raw = "";
+  for await (const chunk of req) raw += String(chunk);
+  return raw ? JSON.parse(raw) : undefined;
+}
 
+export async function startHttp(options: { port: number }): Promise<Server> {
+  const httpServer = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
-      const reqObj: MCPRequest = JSON.parse(body);
-      if (reqObj.method === "list_tools") {
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ id: reqObj.id ?? null, result: { tools: [] } }));
-        return;
-      }
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ id: reqObj.id ?? null, error: { message: "unknown method" } }));
+      const parsedBody = await readBody(req);
+      // Stateless mode: the SDK requires a fresh transport (and server) per request.
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      res.on("close", () => transport.close());
+      await createMcpServer().connect(transport);
+      await transport.handleRequest(req, res, parsedBody);
     } catch {
       res.statusCode = 400;
       res.end("invalid json\n");
     }
   });
 
-  server.listen(options.port, () => {
+  httpServer.listen(options.port, () => {
     console.log(`GFW MCP (http) listening on ${options.port}`);
   });
 
-  return server;
+  return httpServer;
 }
