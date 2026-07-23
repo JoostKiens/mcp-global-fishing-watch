@@ -17,8 +17,11 @@ Read the doc that matches what you're touching:
 | Directory layout, data flow, the report queue/cache, transports, security model | [`docs/claude/architecture.md`](docs/claude/architecture.md) |
 | Code style — functional patterns, error handling, SOLID-for-TS, naming          | [`docs/claude/conventions.md`](docs/claude/conventions.md)   |
 | Adding or changing an MCP tool specifically                                     | [`docs/claude/mcp-tools.md`](docs/claude/mcp-tools.md)       |
+| The exact shape of a specific GFW v3 endpoint — params, filters, response fields | [`docs/claude/gfw-api-docs-v3.md`](docs/claude/gfw-api-docs-v3.md) |
 
 We follow the [MCP best practices guide](https://modelcontextprotocol.info/docs/best-practices/), **adapted for a single-process, single-user local/npx tool** rather than the distributed production service it was written for. `architecture.md` has an explicit table of what we adopt, adapt, or deliberately skip (Redis, circuit breakers, Kubernetes autoscaling, etc. are all out of scope here — don't add them "for best practice" without checking that table first).
+
+`gfw-api-docs-v3.md` is a copy-paste of GFW's own API docs, reformatted for internal reference — **treat it as a starting point, not ground truth.** It has already been caught disagreeing with the live API (JOO-10: `/v3/vessels/search`'s advanced-search field list was wrong — `mmsi` doesn't exist as a field, `ssvid` does, and it was missing most of the real field set). Before shipping a param name, enum value, or query-encoding assumption pulled from this file, verify it against the live API — a throwaway script hitting `https://gateway.api.globalfishingwatch.org` with `GFW_API_TOKEN` from `.env.local` is the fastest way; `npm run test:live` is the durable version once a tool exists. If you find the doc wrong, fix it in place (with a note on what was verified and when) rather than routing around it silently — the next person to read it needs the correction too.
 
 ## Non-negotiable constraints
 
