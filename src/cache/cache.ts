@@ -10,7 +10,13 @@ interface CacheEntry<V> {
   readonly expiresAt: number | undefined;
 }
 
-export class Cache<K, V> {
+/**
+ * K is constrained to string | number (not arbitrary objects) because entries
+ * are stored in a Map, which compares object/array keys by reference — a
+ * structural key would silently never hit. Build a string key with
+ * normalizeKey first if the natural key is an object.
+ */
+export class Cache<K extends string | number, V> {
   private readonly ttlMs: number | undefined;
   private readonly now: () => number;
   private readonly store = new Map<K, CacheEntry<V>>();
