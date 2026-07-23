@@ -1,9 +1,9 @@
 # cache
 
-Generic in-memory caching primitives, scoped to the life of one process. No consumer
-instantiates a cache yet — tools that need one (vessel metadata, 4Wings report
-responses, EEZ region lookups) construct their own typed `Cache` instance when
-those tools are implemented.
+Generic in-memory caching primitives, scoped to the life of one process. Vessel
+metadata and EEZ region lookups still need their own typed `Cache` instance
+constructed when those tools are implemented; the 4Wings report cache is already
+wired up inside `ReportQueue` below.
 
 - `cache.ts` — `Cache<K, V>`, a `Map`-backed cache class with optional per-instance
   TTL (stateful infrastructure, per `docs/claude/conventions.md`). Expiry is lazy
@@ -18,3 +18,10 @@ those tools are implemented.
   and `undefined` are tagged distinctly so they don't collapse into `{}`/`null`/a
   dropped key and collide with an unrelated param value. Throws on a circular
   params object rather than overflowing the stack.
+- `report-queue.ts` — `ReportQueue`, the single-concurrency lock, 15-min report
+  cache, and 524/`last-report` recovery for GFW's `4wings/report` endpoint
+  (stateful infrastructure, per `docs/claude/conventions.md`). One instance should
+  be shared across every tool that hits the endpoint (`get_fishing_activity`,
+  `get_dark_vessel_detections`, `get_vessel_presence`) — GFW's one-concurrent-report
+  limit is per token, not per tool. Never call `4wings/report` directly; go through
+  `ReportQueue.run()`.
