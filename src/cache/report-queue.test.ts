@@ -108,7 +108,7 @@ describe("ReportQueue", () => {
     const firstCall = queue.run({ region: "eez:1" });
     const secondCall = queue.run({ region: "eez:2" });
 
-    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
     const secondResult = await secondCall;
 
     expect(secondResult).toEqual({
@@ -122,6 +122,27 @@ describe("ReportQueue", () => {
 
     inFlight.resolve({ ok: true, value: { total: 1 } });
     await firstCall;
+  });
+
+  it("outlasts a holder's full 524-recovery instead of timing out mid-recovery", async () => {
+    vi.useFakeTimers();
+    const client = createMockClient();
+    vi.mocked(client.post).mockResolvedValueOnce(http524).mockResolvedValueOnce({ ok: true, value: { total: 9 } });
+    vi.mocked(client.get)
+      .mockResolvedValueOnce(http524)
+      .mockResolvedValueOnce({ ok: true, value: { total: 1 } });
+
+    const queue = new ReportQueue(client);
+    const firstCall = queue.run({ region: "eez:1" });
+    const secondCall = queue.run({ region: "eez:2" });
+
+    // First caller 524s, then waits out one poll interval before last-report resolves.
+    await vi.advanceTimersByTimeAsync(5000);
+    const [firstResult, secondResult] = await Promise.all([firstCall, secondCall]);
+
+    expect(firstResult).toEqual({ ok: true, value: { total: 1 } });
+    expect(secondResult).toEqual({ ok: true, value: { total: 9 } });
+    expect(client.post).toHaveBeenCalledTimes(2);
   });
 
   it("polls last-report on a 524 and resolves once it returns data", async () => {

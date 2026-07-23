@@ -1,4 +1,5 @@
 import type { GfwClient, GfwError } from "../gfw-client/client.js";
+import type { Result } from "../result.js";
 import { Cache } from "./cache.js";
 import { normalizeKey } from "./normalize-key.js";
 
@@ -6,18 +7,19 @@ const REPORT_ENDPOINT = "/v3/4wings/report";
 const LAST_REPORT_ENDPOINT = "/v3/4wings/last-report";
 
 const REPORT_CACHE_TTL_MS = 15 * 60 * 1000;
-const QUEUE_WAIT_TIMEOUT_MS = 2 * 60 * 1000;
 const LAST_REPORT_POLL_INTERVAL_MS = 5000;
 const LAST_REPORT_WINDOW_MS = 30 * 60 * 1000;
+// A queued caller must be able to outlast whatever the holder ahead of it is doing,
+// including a full 524→last-report recovery — otherwise it times out with "try again
+// shortly" while the holder is still legitimately working the problem.
+const QUEUE_WAIT_TIMEOUT_MS = LAST_REPORT_WINDOW_MS;
 
 export type ReportQueueError =
   | { readonly kind: "queue-timeout"; readonly message: string }
   | { readonly kind: "poll-timeout"; readonly message: string }
   | { readonly kind: "gfw-error"; readonly error: GfwError };
 
-export type ReportQueueResult<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: ReportQueueError };
+export type ReportQueueResult<T> = Result<T, ReportQueueError>;
 
 interface Waiter {
   readonly wake: () => void;
@@ -44,7 +46,7 @@ export class ReportQueue {
     const cacheKey = normalizeKey(params);
     const cached = this.cache.get(cacheKey);
     if (cached !== undefined) {
-      return { ok: true, value: cached as T };
+      return cacheHit<T>(cached);
     }
 
     const acquired = await this.acquireLock();
@@ -61,7 +63,7 @@ export class ReportQueue {
     try {
       const cachedAfterWait = this.cache.get(cacheKey);
       if (cachedAfterWait !== undefined) {
-        return { ok: true, value: cachedAfterWait as T };
+        return cacheHit<T>(cachedAfterWait);
       }
       return await this.execute<T>(cacheKey, params);
     } finally {
@@ -78,29 +80,31 @@ export class ReportQueue {
     if (isGfwTimeout(result.error)) {
       return this.pollLastReport<T>(cacheKey);
     }
-    return { ok: false, error: { kind: "gfw-error", error: result.error } };
+    return gfwError<T>(result.error);
   }
 
   private async pollLastReport<T>(cacheKey: string): Promise<ReportQueueResult<T>> {
     const deadline = Date.now() + LAST_REPORT_WINDOW_MS;
-    while (Date.now() < deadline) {
-      await sleep(LAST_REPORT_POLL_INTERVAL_MS);
+    while (true) {
       const result = await this.client.get<T>(LAST_REPORT_ENDPOINT);
       if (result.ok) {
         this.cache.set(cacheKey, result.value);
         return { ok: true, value: result.value };
       }
       if (!isGfwTimeout(result.error)) {
-        return { ok: false, error: { kind: "gfw-error", error: result.error } };
+        return gfwError<T>(result.error);
       }
+      if (Date.now() >= deadline) {
+        return {
+          ok: false,
+          error: {
+            kind: "poll-timeout",
+            message: "GFW report did not complete within the 30-minute last-report window.",
+          },
+        };
+      }
+      await sleep(LAST_REPORT_POLL_INTERVAL_MS);
     }
-    return {
-      ok: false,
-      error: {
-        kind: "poll-timeout",
-        message: "GFW report did not complete within the 30-minute last-report window.",
-      },
-    };
   }
 
   // A `busy` flag plus a FIFO array of waiters, not a chained-promise mutex: a
@@ -146,6 +150,14 @@ export class ReportQueue {
 
 function isGfwTimeout(error: GfwError): boolean {
   return error.kind === "http-error" && error.status === 524;
+}
+
+function cacheHit<T>(value: unknown): ReportQueueResult<T> {
+  return { ok: true, value: value as T };
+}
+
+function gfwError<T>(error: GfwError): ReportQueueResult<T> {
+  return { ok: false, error: { kind: "gfw-error", error } };
 }
 
 function sleep(ms: number): Promise<void> {
